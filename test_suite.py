@@ -5,6 +5,7 @@ import socket
 import os
 import random
 from datetime import datetime
+from queue import Queue
 
 # Import the VirtualMachine class and main functions
 from vm import VirtualMachine
@@ -16,6 +17,9 @@ class TestVirtualMachine(unittest.TestCase):
         self.vm = VirtualMachine(999, 12000, [], 5)
         # Force the VM to be "running" so that we can test tick and update methods
         self.vm.running = True
+        # Ensure the VM has an internal message queue for testing
+        if not hasattr(self.vm, 'message_queue'):
+            self.vm.message_queue = Queue()
 
     def tearDown(self):
         self.vm.stop()
@@ -35,6 +39,12 @@ class TestVirtualMachine(unittest.TestCase):
         self.vm.update_logical_clock(5)
         self.assertEqual(self.vm.logical_clock, 6)  # max(3,5) + 1 = 6
 
+    def test_update_logical_clock_with_lower_message(self):
+        # If the received clock is lower than current, clock still increments.
+        self.vm.logical_clock = 10
+        self.vm.update_logical_clock(4)
+        self.assertEqual(self.vm.logical_clock, 11)  # max(10,4) + 1 = 11
+
     def test_process_message(self):
         # Insert a message into the queue and process it.
         self.vm.logical_clock = 0
@@ -44,11 +54,34 @@ class TestVirtualMachine(unittest.TestCase):
         # Logical clock becomes max(0,10) + 1 = 11.
         self.assertEqual(self.vm.logical_clock, 11)
 
+    def test_multiple_message_processing(self):
+        # Enqueue multiple messages and process them sequentially.
+        self.vm.logical_clock = 0
+        messages = [2, 7, 3]
+        for msg in messages:
+            self.vm.message_queue.put(msg)
+        # Process first message
+        self.vm.process_message()  # clock: max(0,2) + 1 = 3
+        self.assertEqual(self.vm.logical_clock, 3)
+        # Process second message
+        self.vm.process_message()  # clock: max(3,7) + 1 = 8
+        self.assertEqual(self.vm.logical_clock, 8)
+        # Process third message
+        self.vm.process_message()  # clock: max(8,3) + 1 = 9
+        self.assertEqual(self.vm.logical_clock, 9)
+
     def test_internal_event(self):
         # Calling an internal event should increment the logical clock.
         initial = self.vm.logical_clock
         self.vm.internal_event()
         self.assertEqual(self.vm.logical_clock, initial + 1)
+
+    def test_multiple_internal_events(self):
+        # Calling internal_event multiple times should increment the clock accordingly.
+        initial = self.vm.logical_clock
+        for _ in range(5):
+            self.vm.internal_event()
+        self.assertEqual(self.vm.logical_clock, initial + 5)
 
     def test_send_message_no_connection(self):
         # Attempting to send a message without a connection should log an error but not crash.
@@ -90,6 +123,28 @@ class TestVirtualMachine(unittest.TestCase):
         if os.path.exists(log_file):
             os.remove(log_file)
 
+    def test_stop_method_idempotence(self):
+        # Calling stop multiple times should not raise an error.
+        try:
+            self.vm.stop()
+            self.vm.stop()  # second call should be safe
+        except Exception as e:
+            self.fail(f"Calling stop() twice raised an exception: {e}")
+
+    def test_run_method_thread(self):
+        # Run the vm in a separate thread, send a message, and ensure it is processed.
+        self.vm.logical_clock = 0
+        # Start the run method in a separate thread
+        t = threading.Thread(target=self.vm.run)
+        t.daemon = True
+        t.start()
+        # Enqueue a message after a short delay
+        time.sleep(1)
+        self.vm.message_queue.put(15)
+        time.sleep(1)
+        # Processed message should update logical clock to max(current,15)+1
+        self.assertGreaterEqual(self.vm.logical_clock, 16)
+
 class TestMainFunctionality(unittest.TestCase):
     def setUp(self):
         # Clear the global list of VMs in main before setting up new ones.
@@ -120,6 +175,29 @@ class TestMainFunctionality(unittest.TestCase):
         for vm in self.vms:
             self.assertTrue(vm.running)
         # Now stop all VMs and ensure they are not running.
+        for vm in self.vms:
+            vm.stop()
+        time.sleep(1)
+        for vm in self.vms:
+            self.assertFalse(vm.running)
+
+    def test_setup_vms_unique_ids(self):
+        # Ensure that VMs set up have unique IDs.
+        ids = [vm.id for vm in self.vms]
+        self.assertEqual(len(ids), len(set(ids)), "VM IDs should be unique")
+
+    def test_random_clock_rate_range(self):
+        # Verify that the clock rates for each VM are within the expected range.
+        for vm in self.vms:
+            self.assertGreaterEqual(vm.clock_rate, 1)
+            self.assertLessEqual(vm.clock_rate, 6)
+
+    def test_run_and_stop_all_vms(self):
+        # Run all VMs, wait, then stop them and verify none are running.
+        threads = main.run_vms(self.vms)
+        time.sleep(3)
+        for vm in self.vms:
+            self.assertTrue(vm.running)
         for vm in self.vms:
             vm.stop()
         time.sleep(1)
