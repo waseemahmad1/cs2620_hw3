@@ -1,4 +1,3 @@
-import threading
 import signal
 import sys
 import time
@@ -6,7 +5,7 @@ import random
 import logging
 from vm import VirtualMachine
 
-# Set up global logging for main
+# Set up global logging for main.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -31,21 +30,26 @@ def setup_vms(num_vms=3, base_port=10000, min_rate=1, max_rate=6):
     return virtual_machines
 
 def run_vms(vms):
-    """Start each VM in its own daemon thread."""
-    threads = []
+    """Start each VM process."""
     for vm in vms:
-        thread = threading.Thread(target=vm.run)
-        thread.daemon = True
-        threads.append(thread)
-        thread.start()
+        vm.start()  # Launch each VM as a separate process.
         logger.info(f"Started VM {vm.id}")
-    return threads
+
+def stop_vms(vms):
+    """Stop all VM processes and wait for them to terminate."""
+    for vm in vms:
+        if vm.is_alive():
+            vm.running = False  # Signal the process to stop
+            logger.info(f"Stopping VM {vm.id}")
+            vm.join(timeout=2)  # Wait for process to terminate
+            if vm.is_alive():
+                logger.warning(f"VM {vm.id} did not terminate gracefully, terminating...")
+                vm.terminate()  # Force terminate if it doesn't stop gracefully
 
 def signal_handler(sig, frame):
     """Gracefully shut down all VMs on SIGINT."""
     logger.info("Shutting down all virtual machines...")
-    for vm in virtual_machines:
-        vm.stop()
+    stop_vms(virtual_machines)
     logger.info("Shutdown complete. Exiting.")
     sys.exit(0)
 
@@ -53,13 +57,14 @@ def main():
     logger.info("Starting Lamport Clock Simulation")
     signal.signal(signal.SIGINT, signal_handler)
     vms = setup_vms(num_vms=3)
-    threads = run_vms(vms)
+    run_vms(vms)
     logger.info("All VMs are running. Press Ctrl+C to stop.")
     try:
+        # Keep the main process running
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        pass
+        stop_vms(vms)
 
 if __name__ == "__main__":
     main()
