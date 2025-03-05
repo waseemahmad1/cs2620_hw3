@@ -2,9 +2,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import re
 from datetime import datetime
+import glob
 
 def parse_log_file(filename):
-    # parse log files for relevant information
+    # Parse log files for relevant information
     data = []
     pattern = re.compile(
         r'^(?P<log_ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) - (?P<event>[^,]+), System time: (?P<sys_time>[\d\- :.]+), (?P<details>.*)$'
@@ -42,11 +43,10 @@ def parse_log_file(filename):
     return df
 
 def parse_all_logs(filenames):
-
     dfs = []
     for fname in filenames:
         df = parse_log_file(fname)
-        # Extract VM id from the filename.
+        # Extract VM id from the filename (assumes filenames like "vm_1.log")
         parts = fname.split("_")
         if len(parts) > 1:
             vm_id = parts[1].split(".")[0]
@@ -59,11 +59,12 @@ def parse_all_logs(filenames):
     return combined_df
 
 def plot_queue_sizes(df):
-    # plot queue length 
+    # Plot queue length over time for each VM
     plt.figure(figsize=(12, 6))
     for vm_id, group in df.groupby("vm_id"):
         df_receive = group[group["event"].str.upper() == "RECEIVE"]
-        plt.plot(df_receive["system_time"], df_receive["queue_length"], marker='o', linestyle='-', label=f"VM {vm_id}")
+        plt.plot(df_receive["system_time"], df_receive["queue_length"],
+                 marker='o', linestyle='-', label=f"VM {vm_id}")
     plt.xlabel("System Time")
     plt.ylabel("Queue Length")
     plt.title("Queue Length Over Time (All VMs)")
@@ -73,7 +74,7 @@ def plot_queue_sizes(df):
     plt.show()
 
 def compute_jump_stats(df):
-    # comute jump stats
+    # Compute jump statistics for logical clock updates
     stats = {}
     for vm_id, group in df.groupby("vm_id"):
         group = group.dropna(subset=["logical_clock"]).sort_values(by="system_time")
@@ -82,7 +83,6 @@ def compute_jump_stats(df):
     return stats
 
 def compute_drift(df):
-    
     drift_results = {}
     for vm_id, group in df.groupby("vm_id"):
         group = group.dropna(subset=["logical_clock"]).sort_values(by="system_time")
@@ -100,7 +100,6 @@ def compute_drift(df):
     return drift_results
 
 def print_jump_stats_table(jump_stats):
-    
     summary_list = []
     for vm_id, stats in jump_stats.items():
         temp = stats.to_dict()
@@ -110,11 +109,16 @@ def print_jump_stats_table(jump_stats):
     return summary_df
 
 if __name__ == '__main__':
-    filenames = ["vm_1.log", "vm_2.log", "vm_3.log"]
+    # Use glob to automatically find all log files matching the pattern (e.g., vm_1.log, vm_2.log, etc.)
+    filenames = glob.glob("vm_*.log")
+    print("Found log files:", filenames)
+    
     df_all = parse_all_logs(filenames)
     
+    # Plot the queue sizes for each VM
     plot_queue_sizes(df_all)
     
+    # Compute and display jump statistics for the logical clock
     jump_stats = compute_jump_stats(df_all)
     print("Jump Statistics by VM:")
     for vm_id, stats in jump_stats.items():
@@ -122,6 +126,7 @@ if __name__ == '__main__':
         print(stats)
         print()
         
+    # Compute and display drift results (difference between final logical clock and elapsed time)
     drift_results = compute_drift(df_all)
     print("Drift Results by VM:")
     for vm_id, result in drift_results.items():
@@ -129,6 +134,7 @@ if __name__ == '__main__':
               f"Elapsed Seconds: {result['elapsed_seconds']:.2f}, " \
               f"Drift (final LC - elapsed seconds): {result['drift']:.2f}")
     
+    # Print a summary table of jump statistics
     jump_summary_df = print_jump_stats_table(jump_stats)
     print("\nJump Summary Table:")
     print(jump_summary_df)
